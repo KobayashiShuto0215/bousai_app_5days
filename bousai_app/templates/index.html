@@ -7,6 +7,10 @@
     .panel-title { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; color: #2d5da9; font-size: 18px; font-weight: 700; }
     .title-icon { font-size: 21px; line-height: 1; }
     #shelterMap { width: 100%; height: 284px; border-radius: 9px; background: #d9e9ed; overflow: hidden; }
+    .map-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: -5px 0 10px; color: #647485; font-size: 12px; }
+    .map-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .map-legend-shelter { width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: #2e5aa5; box-shadow: 0 0 0 1px #2e5aa5; }
+    .map-legend-origin { width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: #d74735; box-shadow: 0 0 0 1px #d74735; }
     .weather-heading { justify-content: space-between; gap: 12px; margin-bottom: 16px; }
     .weather-heading-main { display: flex; align-items: center; gap: 9px; }
     .refresh-label { flex: none; color: #27a64a; font-size: 13px; font-weight: 700; }
@@ -27,7 +31,9 @@
     .nearest-heading .results-count { color: #778797; font-size: 12px; font-weight: 400; }
     .nearest-status { min-height: 22px; margin: 0 0 10px; color: #647485; font-size: 13px; }
     .nearest-results { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-    .nearest-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px; border: 1px solid #e8edf2; border-radius: 7px; }
+    .nearest-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px; border: 1px solid #e8edf2; border-radius: 7px; cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; }
+    .nearest-result:hover { background-color: #dceaf7; border-color: #9dbce0; }
+    .nearest-result:focus-visible { outline: 3px solid #2e5aa5; outline-offset: 2px; }
     .nearest-name { color: #314253; font-size: 14px; font-weight: 700; }
     .nearest-distance { color: #2e5aa5; font-size: 13px; font-weight: 700; white-space: nowrap; }
     .nearest-address { grid-column: 1 / -1; color: #788896; font-size: 12px; }
@@ -46,6 +52,10 @@
 <div class="home-layout">
     <section class="home-panel" aria-labelledby="map-heading">
         <h2 class="panel-title" id="map-heading"><span class="title-icon" aria-hidden="true">📍</span>避難所マップ</h2>
+        <div class="map-legend" aria-label="地図の凡例">
+            <span class="map-legend-item"><span class="map-legend-shelter" aria-hidden="true"></span>避難所</span>
+            <span class="map-legend-item"><span class="map-legend-origin" aria-hidden="true"></span>現在地・青森駅</span>
+        </div>
         <div id="shelterMap" aria-label="青森市周辺の地図"></div>
     </section>
 
@@ -88,6 +98,31 @@ document.addEventListener('DOMContentLoaded', function() {
         attribution: '© OpenStreetMap contributors',
         referrerPolicy: 'strict-origin-when-cross-origin'
     }).addTo(map);
+
+    let selectedShelterMarker = null;
+    let originMarker = null;
+    window.focusShelterOnMap = shelter => {
+        const coordinates = [shelter.latitude, shelter.longitude];
+        map.setView(coordinates, 16);
+        if (selectedShelterMarker) map.removeLayer(selectedShelterMarker);
+        selectedShelterMarker = L.marker(coordinates).addTo(map);
+        selectedShelterMarker.bindPopup(shelter.name).openPopup();
+        document.getElementById('shelterMap').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    window.markOriginOnMap = (origin, locationLabel) => {
+        const coordinates = [origin.latitude, origin.longitude];
+        map.setView(coordinates, 14);
+        if (originMarker) map.removeLayer(originMarker);
+        originMarker = L.circleMarker(coordinates, {
+            radius: 9,
+            color: '#fff',
+            weight: 3,
+            fillColor: '#d74735',
+            fillOpacity: 1
+        }).addTo(map);
+        originMarker.bindPopup(locationLabel).openPopup();
+        document.getElementById('shelterMap').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
 
     // 気象警報・注意報の自動更新機能
     function updateWeatherWarnings() {
@@ -186,6 +221,16 @@ document.addEventListener('DOMContentLoaded', function() {
         nearest.forEach(shelter => {
             const item = document.createElement('li');
             item.className = 'nearest-result';
+            item.tabIndex = 0;
+            item.setAttribute('role', 'button');
+            item.setAttribute('aria-label', `${shelter.name}を地図に表示`);
+            item.addEventListener('click', () => window.focusShelterOnMap?.(shelter));
+            item.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    window.focusShelterOnMap?.(shelter);
+                }
+            });
 
             const name = document.createElement('span');
             name.className = 'nearest-name';
@@ -204,7 +249,10 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    stationButton.addEventListener('click', () => showNearest(station, '青森駅'));
+    stationButton.addEventListener('click', () => {
+        window.markOriginOnMap?.(station, '青森駅');
+        showNearest(station, '青森駅');
+    });
 
     currentButton.addEventListener('click', () => {
         if (!navigator.geolocation) {
@@ -222,7 +270,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 };
                 const locationName = await getLocationName(origin.latitude, origin.longitude);
                 currentButton.disabled = false;
-                showNearest(origin, locationName ? `現在地（${locationName}）` : '現在地');
+                const locationLabel = locationName ? `現在地（${locationName}）` : '現在地';
+                window.markOriginOnMap?.(origin, locationLabel);
+                showNearest(origin, locationLabel);
             },
             error => {
                 currentButton.disabled = false;

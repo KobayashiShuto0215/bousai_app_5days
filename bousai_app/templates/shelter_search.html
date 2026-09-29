@@ -15,7 +15,8 @@
 	.results-count { color: #778797; font-size: 12px; font-weight: 400; }
 	.location-status { min-height: 24px; margin: 0 0 12px; color: #647485; font-size: 13px; }
 	.shelter-results { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
-	.shelter-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 13px 14px; border: 1px solid #e8edf2; border-radius: 7px; }
+	.shelter-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 13px 14px; border: 1px solid #e8edf2; border-radius: 7px; transition: background-color 120ms ease, border-color 120ms ease; }
+	.shelter-result:hover { background-color: #dceaf7; border-color: #9dbce0; }
 	.shelter-name { color: #314253; font-size: 15px; font-weight: 700; }
 	.shelter-distance { color: #2e5aa5; font-size: 14px; font-weight: 700; white-space: nowrap; }
 	.shelter-address { grid-column: 1 / -1; color: #788896; font-size: 12px; }
