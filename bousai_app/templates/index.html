@@ -11,6 +11,8 @@
     .map-legend-item { display: inline-flex; align-items: center; gap: 6px; }
     .map-legend-shelter { width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: #2e5aa5; box-shadow: 0 0 0 1px #2e5aa5; }
     .map-legend-origin { width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: #d74735; box-shadow: 0 0 0 1px #d74735; }
+    .map-route-status { min-height: 20px; margin: 10px 0 0; color: #43576a; font-size: 13px; }
+    .map-route-note { margin: 5px 0 0; color: #788896; font-size: 11px; line-height: 1.6; }
     .weather-heading { justify-content: space-between; gap: 12px; margin-bottom: 16px; }
     .weather-heading-main { display: flex; align-items: center; gap: 9px; }
     .refresh-label { flex: none; color: #27a64a; font-size: 13px; font-weight: 700; }
@@ -57,6 +59,8 @@
             <span class="map-legend-item"><span class="map-legend-origin" aria-hidden="true"></span>現在地・青森駅</span>
         </div>
         <div id="shelterMap" aria-label="青森市周辺の地図"></div>
+        <p class="map-route-status" id="map-route-status" role="status" aria-live="polite">避難所を選択すると、選択地点からの徒歩経路を表示します。</p>
+        <p class="map-route-note">経路は地図データに基づく参考情報です。災害時の通行可否や安全を保証するものではありません。</p>
     </section>
 
     <section class="home-panel" aria-labelledby="weather-heading">
@@ -101,15 +105,76 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let selectedShelterMarker = null;
     let originMarker = null;
-    window.focusShelterOnMap = shelter => {
+    let routeLayer = null;
+    let selectedOrigin = null;
+    let routeRequestSequence = 0;
+    const routeStatus = document.getElementById('map-route-status');
+    const mapElement = document.getElementById('shelterMap');
+
+    function createPopupContent(label) {
+        const content = document.createElement('span');
+        content.textContent = label;
+        return content;
+    }
+
+    window.focusShelterOnMap = async shelter => {
         const coordinates = [shelter.latitude, shelter.longitude];
         map.setView(coordinates, 16);
         if (selectedShelterMarker) map.removeLayer(selectedShelterMarker);
         selectedShelterMarker = L.marker(coordinates).addTo(map);
-        selectedShelterMarker.bindPopup(shelter.name).openPopup();
-        document.getElementById('shelterMap').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        selectedShelterMarker.bindPopup(createPopupContent(shelter.name)).openPopup();
+
+        const requestSequence = ++routeRequestSequence;
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = null;
+        if (!selectedOrigin) {
+            routeStatus.textContent = '出発地点を選択すると徒歩経路を表示できます。';
+            mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+
+        routeStatus.textContent = '徒歩経路を取得しています...';
+        try {
+            const response = await fetch('/api/route', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    origin_latitude: selectedOrigin.latitude,
+                    origin_longitude: selectedOrigin.longitude,
+                    destination_latitude: shelter.latitude,
+                    destination_longitude: shelter.longitude
+                })
+            });
+            const route = await response.json();
+            if (!response.ok || !Array.isArray(route.coordinates) || route.coordinates.length < 2) {
+                throw new Error('Route unavailable');
+            }
+            if (requestSequence !== routeRequestSequence) return;
+
+            routeLayer = L.polyline(route.coordinates, {
+                color: '#13857b',
+                weight: 5,
+                opacity: 0.9
+            }).addTo(map);
+            map.fitBounds(routeLayer.getBounds().pad(0.15), { maxZoom: 15 });
+            selectedShelterMarker.openPopup();
+            const distance = route.distance_km < 1
+                ? `${Math.round(route.distance_km * 1000)} m`
+                : `${route.distance_km.toFixed(1)} km`;
+            const duration = Math.max(1, Math.round(route.duration_seconds / 60));
+            routeStatus.textContent = `徒歩経路: ${distance}、約${duration}分`;
+        } catch (error) {
+            if (requestSequence !== routeRequestSequence) return;
+            routeStatus.textContent = '徒歩経路を取得できませんでした。避難所の位置を表示しています。';
+        }
+        mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
     window.markOriginOnMap = (origin, locationLabel) => {
+        selectedOrigin = { latitude: origin.latitude, longitude: origin.longitude };
+        routeRequestSequence += 1;
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = null;
+        routeStatus.textContent = `${locationLabel}を出発地点に設定しました。避難所を選択すると徒歩経路を表示します。`;
         const coordinates = [origin.latitude, origin.longitude];
         map.setView(coordinates, 14);
         if (originMarker) map.removeLayer(originMarker);
@@ -120,8 +185,8 @@ document.addEventListener('DOMContentLoaded', function() {
             fillColor: '#d74735',
             fillOpacity: 1
         }).addTo(map);
-        originMarker.bindPopup(locationLabel).openPopup();
-        document.getElementById('shelterMap').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        originMarker.bindPopup(createPopupContent(locationLabel)).openPopup();
+        mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
     // 気象警報・注意報の自動更新機能

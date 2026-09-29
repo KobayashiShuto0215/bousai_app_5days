@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, render_template, session, redirect, u
 from urllib.parse import urlparse, urljoin, urlencode
 from functools import wraps
 import json
+import math
 import os
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -374,6 +375,88 @@ def api_location_name():
         return jsonify({'name': results.get('lv01Nm', '')})
     except Exception:
         return jsonify({'name': ''})
+
+
+def decode_valhalla_shape(encoded_shape):
+    position = 0
+    latitude = 0
+    longitude = 0
+    coordinates = []
+
+    def read_delta():
+        nonlocal position
+        result = 0
+        shift = 0
+        while True:
+            byte = ord(encoded_shape[position]) - 63
+            position += 1
+            result |= (byte & 0x1f) << shift
+            shift += 5
+            if byte < 0x20:
+                break
+        return ~(result >> 1) if result & 1 else result >> 1
+
+    while position < len(encoded_shape):
+        latitude += read_delta()
+        longitude += read_delta()
+        coordinates.append([latitude / 1_000_000, longitude / 1_000_000])
+    return coordinates
+
+
+@app.route('/api/route', methods=['POST'])
+def api_route():
+    """選択地点から避難所までの徒歩経路を取得する"""
+    payload = request.get_json(silent=True) or {}
+    coordinate_fields = ('origin_latitude', 'origin_longitude', 'destination_latitude', 'destination_longitude')
+    try:
+        coordinates = {field: float(payload[field]) for field in coordinate_fields}
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': '有効な出発地と避難所の座標が必要です'}), 400
+
+    if (
+        not all(math.isfinite(value) for value in coordinates.values())
+        or not -90 <= coordinates['origin_latitude'] <= 90
+        or not -90 <= coordinates['destination_latitude'] <= 90
+        or not -180 <= coordinates['origin_longitude'] <= 180
+        or not -180 <= coordinates['destination_longitude'] <= 180
+    ):
+        return jsonify({'error': '座標の範囲が正しくありません'}), 400
+
+    route_payload = {
+        'locations': [
+            {'lat': coordinates['origin_latitude'], 'lon': coordinates['origin_longitude'], 'type': 'break'},
+            {'lat': coordinates['destination_latitude'], 'lon': coordinates['destination_longitude'], 'type': 'break'}
+        ],
+        'costing': 'pedestrian',
+        'directions_options': {'units': 'kilometers'}
+    }
+    route_request = urllib.request.Request(
+        'https://valhalla1.openstreetmap.de/route',
+        data=json.dumps(route_payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json', 'User-Agent': 'BousaiApp/1.0'},
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(route_request, timeout=15) as response:
+            route_data = json.loads(response.read())
+        trip = route_data['trip']
+        route_coordinates = decode_valhalla_shape(trip['legs'][0]['shape'])
+        distance_km = float(trip['summary']['length'])
+        duration_seconds = float(trip['summary']['time'])
+        if (
+            len(route_coordinates) < 2
+            or not math.isfinite(distance_km)
+            or not math.isfinite(duration_seconds)
+        ):
+            raise ValueError('Invalid route response')
+        return jsonify({
+            'coordinates': route_coordinates,
+            'distance_km': distance_km,
+            'duration_seconds': duration_seconds
+        })
+    except Exception:
+        return jsonify({'error': '徒歩経路を取得できませんでした'}), 502
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
