@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 
 {% block content %}
+<style>
+  .shelter-results li { padding: 8px 10px; transition: background-color 120ms ease; }
+  .shelter-results li:hover { background-color: #dceaf7; }
+</style>
 <h2>検索結果</h2>
 
 {% if results %}
-  <ul>
+  <ul class="shelter-results">
     {% for shelter in results %}
     <li>{{ shelter.name }}</li>
     {% endfor %}

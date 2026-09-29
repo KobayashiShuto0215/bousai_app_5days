@@ -1,8 +1,147 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h2>避難所検索</h2>
-<p>登録されている避難所を確認できます。</p>
+<style>
+	.shelter-search { width: min(710px, 100%); margin: 0 auto; }
+	.search-title { margin: 0 0 8px; color: #2d5da9; font-size: 22px; }
+	.search-intro { margin: 0 0 18px; color: #647485; font-size: 14px; line-height: 1.7; }
+	.search-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+	.search-actions button { min-height: 44px; padding: 0 16px; border: 1px solid #2e5aa5; border-radius: 6px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+	.search-actions button:disabled { cursor: wait; opacity: .65; }
+	.primary-action { background: #2e5aa5; color: #fff; }
+	.secondary-action { background: #fff; color: #2e5aa5; }
+	.results-panel { padding: 20px; background: #fff; border: 1px solid #edf1f5; border-radius: 12px; box-shadow: 0 5px 20px #2847650d; }
+	.results-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; color: #314253; font-size: 17px; }
+	.results-count { color: #778797; font-size: 12px; font-weight: 400; }
+	.location-status { min-height: 24px; margin: 0 0 12px; color: #647485; font-size: 13px; }
+	.shelter-results { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+	.shelter-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 13px 14px; border: 1px solid #e8edf2; border-radius: 7px; }
+	.shelter-name { color: #314253; font-size: 15px; font-weight: 700; }
+	.shelter-distance { color: #2e5aa5; font-size: 14px; font-weight: 700; white-space: nowrap; }
+	.shelter-address { grid-column: 1 / -1; color: #788896; font-size: 12px; }
+	.shelter-note { margin: 16px 0 0; color: #788896; font-size: 12px; line-height: 1.65; }
+	@media (max-width: 600px) {
+		.search-title { font-size: 20px; }
+		.search-actions { display: grid; grid-template-columns: 1fr; }
+		.results-panel { padding: 16px; }
+		.shelter-result { padding: 12px; }
+	}
+</style>
 
-<p><a href="/all_shelters">全施設一覧</a></p>
+<section class="shelter-search" aria-labelledby="search-title" data-shelters='{{ aomori_shelters|tojson|forceescape }}'>
+	<h1 class="search-title" id="search-title">現在地から避難所を探す</h1>
+	<p class="search-intro">位置情報を使って、近くの避難所を距離順に表示します。</p>
+
+	<div class="search-actions">
+		<button class="primary-action" id="current-location-button" type="button">現在地を取得</button>
+		<button class="secondary-action" id="station-test-button" type="button">青森駅をテスト地点にする</button>
+	</div>
+
+	<section class="results-panel" aria-labelledby="results-heading">
+		<h2 class="results-heading" id="results-heading">近くの避難所 <span class="results-count">上位5施設</span></h2>
+		<p class="location-status" id="location-status" role="status" aria-live="polite">現在地を取得するか、青森駅をテスト地点にしてください。</p>
+		<ol class="shelter-results" id="shelter-results"></ol>
+		<p class="shelter-note">青森市の「津波浸水想定区域外指定避難所等一覧」に基づく表示です。距離は住所位置からの直線距離で、実際の経路や施設の開設状況とは異なります。避難時は最新の情報を確認してください。</p>
+	</section>
+</section>
+
+<script>
+(() => {
+	const shelters = JSON.parse(document.querySelector('.shelter-search').dataset.shelters);
+	const station = { latitude: 40.8296, longitude: 140.7348 };
+	const currentButton = document.getElementById('current-location-button');
+	const stationButton = document.getElementById('station-test-button');
+	const status = document.getElementById('location-status');
+	const results = document.getElementById('shelter-results');
+
+	function distanceMeters(origin, destination) {
+		const radians = degrees => degrees * Math.PI / 180;
+		const latitudeDelta = radians(destination.latitude - origin.latitude);
+		const longitudeDelta = radians(destination.longitude - origin.longitude);
+		const originLatitude = radians(origin.latitude);
+		const destinationLatitude = radians(destination.latitude);
+		const haversine = Math.sin(latitudeDelta / 2) ** 2
+			+ Math.cos(originLatitude) * Math.cos(destinationLatitude)
+			* Math.sin(longitudeDelta / 2) ** 2;
+		return 6371000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+	}
+
+	function formatDistance(meters) {
+		return meters < 1000 ? `${Math.round(meters / 10) * 10} m` : `${(meters / 1000).toFixed(1)} km`;
+	}
+
+	async function getLocationName(latitude, longitude) {
+		try {
+			const query = new URLSearchParams({ lat: latitude, lon: longitude });
+			const response = await fetch(`/api/location_name?${query}`);
+			if (!response.ok) return '';
+			const data = await response.json();
+			return data.name || '';
+		} catch (error) {
+			return '';
+		}
+	}
+
+	function showNearest(origin, locationLabel) {
+		const nearest = shelters
+			.filter(shelter => Number.isFinite(shelter.latitude) && Number.isFinite(shelter.longitude))
+			.map(shelter => ({ ...shelter, distance: distanceMeters(origin, shelter) }))
+			.sort((first, second) => first.distance - second.distance)
+			.slice(0, 5);
+
+		status.textContent = `${locationLabel}から近い避難所を直線距離順に表示しています。`;
+		results.replaceChildren();
+
+		nearest.forEach(shelter => {
+			const item = document.createElement('li');
+			item.className = 'shelter-result';
+
+			const name = document.createElement('span');
+			name.className = 'shelter-name';
+			name.textContent = shelter.name;
+
+			const distance = document.createElement('span');
+			distance.className = 'shelter-distance';
+			distance.textContent = formatDistance(shelter.distance);
+
+			const address = document.createElement('span');
+			address.className = 'shelter-address';
+			address.textContent = shelter.address;
+
+			item.append(name, distance, address);
+			results.append(item);
+		});
+	}
+
+	stationButton.addEventListener('click', () => showNearest(station, '青森駅'));
+
+	currentButton.addEventListener('click', () => {
+		if (!navigator.geolocation) {
+			status.textContent = 'このブラウザーでは位置情報を利用できません。青森駅のテスト地点をお使いください。';
+			return;
+		}
+
+		currentButton.disabled = true;
+		status.textContent = '現在位置を取得しています...';
+		navigator.geolocation.getCurrentPosition(
+			async position => {
+				const origin = {
+					latitude: position.coords.latitude,
+					longitude: position.coords.longitude
+				};
+				const locationName = await getLocationName(origin.latitude, origin.longitude);
+				currentButton.disabled = false;
+				showNearest(origin, locationName ? `現在地（${locationName}）` : '現在地');
+			},
+			error => {
+				currentButton.disabled = false;
+				status.textContent = error.code === error.PERMISSION_DENIED
+					? '位置情報が許可されませんでした。青森駅のテスト地点をお使いください。'
+					: '現在位置を取得できませんでした。もう一度試すか、青森駅のテスト地点をお使いください。';
+			},
+			{ enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+		);
+	});
+})();
+</script>
 {% endblock %}

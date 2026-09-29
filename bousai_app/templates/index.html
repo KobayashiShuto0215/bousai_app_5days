@@ -1,15 +1,77 @@
 {% extends "base.html" %}
 
 {% block content %}
-<!-- 避難所マップ -->
-<h2>避難所マップ</h2>
-<div id="shelterMap" style="height: 300px;"></div>
+<style>
+    .home-layout { width: min(710px, 100%); margin: 0 auto; display: grid; gap: 26px; }
+    .home-panel { padding: 22px; background: #fff; border: 1px solid #edf1f5; border-radius: 15px; box-shadow: 0 5px 20px #2847650d; }
+    .panel-title { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; color: #2d5da9; font-size: 18px; font-weight: 700; }
+    .title-icon { font-size: 21px; line-height: 1; }
+    #shelterMap { width: 100%; height: 284px; border-radius: 9px; background: #d9e9ed; overflow: hidden; }
+    .weather-heading { justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .weather-heading-main { display: flex; align-items: center; gap: 9px; }
+    .refresh-label { flex: none; color: #27a64a; font-size: 13px; font-weight: 700; }
+    #weatherContent { min-height: 138px; padding: 14px 15px; border-radius: 9px; background: #f5f7f9; font-size: 14px; }
+    #weatherContent p { margin: 0 0 10px; }
+    #weatherContent p:last-child { margin-bottom: 0; }
+    .weather-area { color: #43576a; font-weight: 700; }
+    .weather-status { color: #249a48; font-weight: 700; }
+    .weather-meta { color: #7c8b98; font-size: 12px; }
+    .status-icon { margin-right: 5px; }
+    .nearest-intro { margin: -5px 0 15px; color: #647485; font-size: 13px; line-height: 1.7; }
+    .nearest-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+    .nearest-actions button { min-height: 42px; padding: 0 15px; border: 1px solid #2e5aa5; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+    .nearest-actions button:disabled { cursor: wait; opacity: .65; }
+    .nearest-primary { background: #2e5aa5; color: #fff; }
+    .nearest-secondary { background: #fff; color: #2e5aa5; }
+    .nearest-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; color: #314253; font-size: 16px; }
+    .nearest-heading .results-count { color: #778797; font-size: 12px; font-weight: 400; }
+    .nearest-status { min-height: 22px; margin: 0 0 10px; color: #647485; font-size: 13px; }
+    .nearest-results { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+    .nearest-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px; border: 1px solid #e8edf2; border-radius: 7px; }
+    .nearest-name { color: #314253; font-size: 14px; font-weight: 700; }
+    .nearest-distance { color: #2e5aa5; font-size: 13px; font-weight: 700; white-space: nowrap; }
+    .nearest-address { grid-column: 1 / -1; color: #788896; font-size: 12px; }
+    .nearest-note { margin: 13px 0 0; color: #788896; font-size: 11px; line-height: 1.65; }
+    @media (max-width: 600px) {
+        .home-layout { gap: 16px; }
+        .home-panel { padding: 17px; border-radius: 12px; }
+        .panel-title { font-size: 16px; }
+        #shelterMap { height: 260px; }
+        .refresh-label { font-size: 11px; }
+        #weatherContent { padding: 13px; }
+        .nearest-actions { display: grid; grid-template-columns: 1fr; }
+    }
+</style>
 
-<!-- 気象警報・注意報 -->
-<h2>青森市 気象警報・注意報</h2>
-<p>10分おきに自動更新されます。</p>
-<div id="weatherContent">
-  <p>読み込み中...</p>
+<div class="home-layout">
+    <section class="home-panel" aria-labelledby="map-heading">
+        <h2 class="panel-title" id="map-heading"><span class="title-icon" aria-hidden="true">📍</span>避難所マップ</h2>
+        <div id="shelterMap" aria-label="青森市周辺の地図"></div>
+    </section>
+
+    <section class="home-panel" aria-labelledby="weather-heading">
+        <h2 class="panel-title weather-heading" id="weather-heading">
+            <span class="weather-heading-main"><span class="title-icon" aria-hidden="true">🌦</span>青森市 気象警報・注意報</span>
+            <span class="refresh-label">⟳ 10分おき自動更新</span>
+        </h2>
+        <div id="weatherContent" aria-live="polite">
+            <p class="weather-area"><span class="status-icon" aria-hidden="true">📍</span>青森市</p>
+            <p class="weather-status">読み込み中...</p>
+        </div>
+    </section>
+
+    <section class="home-panel" id="home-nearest-shelters" aria-labelledby="home-shelter-heading" data-shelters='{{ aomori_shelters|tojson|forceescape }}'>
+        <h2 class="panel-title" id="home-shelter-heading"><span class="title-icon" aria-hidden="true">📍</span>現在地から近くの避難所</h2>
+        <p class="nearest-intro">現在地を取得するか、青森駅をテスト地点にして近い施設を表示できます。</p>
+        <div class="nearest-actions">
+            <button class="nearest-primary" id="home-current-location-button" type="button">現在地を取得</button>
+            <button class="nearest-secondary" id="home-station-test-button" type="button">青森駅をテスト地点にする</button>
+        </div>
+        <h3 class="nearest-heading">近くの避難所 <span class="results-count">上位5施設</span></h3>
+        <p class="nearest-status" id="home-location-status" role="status" aria-live="polite">位置情報を取得するか、テスト地点を選択してください。</p>
+        <ol class="nearest-results" id="home-shelter-results"></ol>
+        <p class="nearest-note">青森市の津波浸水想定区域外指定避難所等一覧に基づきます。距離は直線距離で、実際の経路や施設の開設状況とは異なります。</p>
+    </section>
 </div>
 
 <!-- Leaflet の読み込み -->
@@ -18,8 +80,8 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // 地図の初期化（藤沢市周辺を中心に設定）
-    const map = L.map('shelterMap').setView([35.3390, 139.4903], 12);
+    // 地図の初期化（青森市周辺を中心に設定）
+    const map = L.map('shelterMap').setView([40.8222, 140.7474], 12);
 
     // OpenStreetMapタイルを追加
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -44,26 +106,26 @@ document.addEventListener('DOMContentLoaded', function() {
         const weatherContent = document.getElementById('weatherContent');
 
         if (data.error) {
-            weatherContent.innerHTML = '<p>気象情報の取得に失敗しました</p>';
+            weatherContent.innerHTML = '<p class="weather-area"><span class="status-icon">📍</span>青森市</p><p class="weather-status">気象情報の取得に失敗しました</p>';
             return;
         }
 
         let warningsHtml = '';
         if (data.warnings && data.warnings.length > 0) {
-            warningsHtml = '<ul>';
+            warningsHtml = '<ul class="weather-status">';
             data.warnings.forEach(warning => {
                 warningsHtml += `<li>${warning.name}（${warning.status}）</li>`;
             });
             warningsHtml += '</ul>';
         } else {
-            warningsHtml = '<p>現在、警報・注意報は発表されていません</p>';
+            warningsHtml = '<p class="weather-status"><span class="status-icon">●</span>現在、警報・注意報は発表されていません</p>';
         }
 
         weatherContent.innerHTML = `
-            <p>対象地域: ${data.area_name || '青森市'}</p>
+            <p class="weather-area"><span class="status-icon">📍</span>${data.area_name || '青森市'}</p>
             ${warningsHtml}
-            <p>最終確認: <span id="lastFetchTime">${data.last_fetch_time || '更新中...'}</span></p>
-            <p>気象庁最終発表: ${data.report_time || '不明'}</p>
+            <p class="weather-meta">◷ データ取得: <span id="lastFetchTime">${data.last_fetch_time || '更新中...'}</span></p>
+            <p class="weather-meta">◌ 気象庁発表: ${data.report_time || '不明'}</p>
         `;
     }
 
@@ -71,5 +133,106 @@ document.addEventListener('DOMContentLoaded', function() {
     updateWeatherWarnings();
     setInterval(updateWeatherWarnings, 600000);
 });
+</script>
+
+<script>
+(() => {
+    const shelterSection = document.getElementById('home-nearest-shelters');
+    const shelters = JSON.parse(shelterSection.dataset.shelters);
+    const station = { latitude: 40.8296, longitude: 140.7348 };
+    const currentButton = document.getElementById('home-current-location-button');
+    const stationButton = document.getElementById('home-station-test-button');
+    const status = document.getElementById('home-location-status');
+    const results = document.getElementById('home-shelter-results');
+
+    function distanceMeters(origin, destination) {
+        const radians = degrees => degrees * Math.PI / 180;
+        const latitudeDelta = radians(destination.latitude - origin.latitude);
+        const longitudeDelta = radians(destination.longitude - origin.longitude);
+        const originLatitude = radians(origin.latitude);
+        const destinationLatitude = radians(destination.latitude);
+        const haversine = Math.sin(latitudeDelta / 2) ** 2
+            + Math.cos(originLatitude) * Math.cos(destinationLatitude)
+            * Math.sin(longitudeDelta / 2) ** 2;
+        return 6371000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+    }
+
+    function formatDistance(meters) {
+        return meters < 1000 ? `${Math.round(meters / 10) * 10} m` : `${(meters / 1000).toFixed(1)} km`;
+    }
+
+    async function getLocationName(latitude, longitude) {
+        try {
+            const query = new URLSearchParams({ lat: latitude, lon: longitude });
+            const response = await fetch(`/api/location_name?${query}`);
+            if (!response.ok) return '';
+            const data = await response.json();
+            return data.name || '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function showNearest(origin, locationLabel) {
+        const nearest = shelters
+            .filter(shelter => Number.isFinite(shelter.latitude) && Number.isFinite(shelter.longitude))
+            .map(shelter => ({ ...shelter, distance: distanceMeters(origin, shelter) }))
+            .sort((first, second) => first.distance - second.distance)
+            .slice(0, 5);
+
+        status.textContent = `${locationLabel}から近い避難所を直線距離順に表示しています。`;
+        results.replaceChildren();
+
+        nearest.forEach(shelter => {
+            const item = document.createElement('li');
+            item.className = 'nearest-result';
+
+            const name = document.createElement('span');
+            name.className = 'nearest-name';
+            name.textContent = shelter.name;
+
+            const distance = document.createElement('span');
+            distance.className = 'nearest-distance';
+            distance.textContent = formatDistance(shelter.distance);
+
+            const address = document.createElement('span');
+            address.className = 'nearest-address';
+            address.textContent = shelter.address;
+
+            item.append(name, distance, address);
+            results.append(item);
+        });
+    }
+
+    stationButton.addEventListener('click', () => showNearest(station, '青森駅'));
+
+    currentButton.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+            status.textContent = 'このブラウザーでは位置情報を利用できません。青森駅のテスト地点をお使いください。';
+            return;
+        }
+
+        currentButton.disabled = true;
+        status.textContent = '現在位置を取得しています...';
+        navigator.geolocation.getCurrentPosition(
+            async position => {
+                const origin = {
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude
+                };
+                const locationName = await getLocationName(origin.latitude, origin.longitude);
+                currentButton.disabled = false;
+                showNearest(origin, locationName ? `現在地（${locationName}）` : '現在地');
+            },
+            error => {
+                currentButton.disabled = false;
+                status.textContent = error.code === error.PERMISSION_DENIED
+                    ? '位置情報が許可されませんでした。青森駅のテスト地点をお使いください。'
+                    : '現在位置を取得できませんでした。もう一度試すか、青森駅のテスト地点をお使いください。';
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+        );
+    });
+})();
 </script>
 {% endblock %}

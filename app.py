@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urlencode
 from functools import wraps
 import json
 import os
@@ -28,8 +28,8 @@ ADMIN_CREDENTIALS = {
 PREFECTURE_CODE = "020000"  # 青森県
 AREA_NAME = "青森市"
 
-# ワークショップ課題：青森市の市区町村コードに変更する
-AREA_CODE = "1420500"
+# 青森市の市区町村コード
+AREA_CODE = "0220100"
 
 WARNING_URL = (
     f"https://www.jma.go.jp/bosai/warning/data/r8/{PREFECTURE_CODE}.json"
@@ -82,6 +82,7 @@ WARNING_CODES = {
 # サンプルデータの読み込み
 DATA_FILE = os.path.join(APP_DIR, 'data', 'shelters.json')
 INSTRUCTIONS_FILE = os.path.join(APP_DIR, 'data', 'instructions.json')
+AOMORI_SHELTERS_FILE = os.path.join(APP_DIR, 'data', 'aomori_tsunami_shelters.json')
 
 def load_json(path, default):
     """JSONファイルを読み込む（存在しない・壊れている場合は default を返す）"""
@@ -93,6 +94,7 @@ def load_json(path, default):
 
 shelters = load_json(DATA_FILE, [])
 instructions = load_json(INSTRUCTIONS_FILE, [])
+aomori_shelters = load_json(AOMORI_SHELTERS_FILE, [])
 
 def save_instructions():
     """指示ボードのデータをファイルに保存する"""
@@ -237,7 +239,11 @@ def get_weather_warnings():
 @app.route('/')
 def index():
     resident_notices = [i for i in instructions if i.get('target') == '住民']
-    return render_template('index.html', resident_notices=resident_notices)
+    return render_template(
+        'index.html',
+        resident_notices=resident_notices,
+        aomori_shelters=aomori_shelters
+    )
 
 # ログインページ
 @app.route('/login', methods=['GET', 'POST'])
@@ -278,15 +284,34 @@ def logout():
     return redirect(url_for('index'))
 
 # 避難所登録ページ※user が避難所登録ページについて具体的に修正指示しない限り、このコードは正しいのでこのまま保持すること。
-@app.route('/shelter_register')
+@app.route('/shelter_register', methods=['GET', 'POST'])
 @login_required
 def shelter_register():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            return render_template(
+                'shelter_register.html',
+                error=True,
+                message='避難所名を入力してください'
+            )
+
+        shelter_id = max((s.get('id', 0) for s in shelters), default=0) + 1
+        shelters.append({'id': shelter_id, 'name': name})
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(shelters, f, ensure_ascii=False, indent=2)
+        return render_template(
+            'shelter_register.html',
+            success=True,
+            message='避難所を登録しました。'
+        )
+
     return render_template('shelter_register.html')
 
 # 避難所検索ページ
 @app.route('/shelter_search')
 def shelter_search():
-    return render_template('shelter_search.html')
+    return render_template('shelter_search.html', aomori_shelters=aomori_shelters)
 
 # 全施設一覧ページ
 @app.route('/all_shelters')
@@ -324,6 +349,31 @@ def get_shelters():
 def api_weather_warnings():
     """気象警報・注意報をJSON形式で返すAPI"""
     return jsonify(get_weather_warnings())
+
+
+@app.route('/api/location_name')
+def api_location_name():
+    """座標から国土地理院の住所検索で町名を取得する"""
+    try:
+        latitude = float(request.args.get('lat', ''))
+        longitude = float(request.args.get('lon', ''))
+    except ValueError:
+        return jsonify({'name': ''}), 400
+
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return jsonify({'name': ''}), 400
+
+    url = 'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?'
+    try:
+        with urllib.request.urlopen(
+            url + urlencode({'lat': latitude, 'lon': longitude}),
+            timeout=5
+        ) as response:
+            address_data = json.loads(response.read())
+        results = address_data.get('results') or {}
+        return jsonify({'name': results.get('lv01Nm', '')})
+    except Exception:
+        return jsonify({'name': ''})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

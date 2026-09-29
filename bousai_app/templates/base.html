@@ -4,27 +4,51 @@
   <meta charset="utf-8">
   <title>{% block title %}防災アプリ{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+      color: #314253;
+      background: #f5f7fa;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: linear-gradient(135deg, #f7f9fc 0%, #fff 48%, #f4f7fa 100%); }
+    .site-header { height: 54px; background: #2e5aa5; color: #fff; box-shadow: 0 2px 7px #183d7626; }
+    .header-inner { width: min(1080px, calc(100% - 40px)); height: 100%; margin: auto; display: flex; align-items: center; justify-content: space-between; }
+    .brand { color: inherit; font-size: 20px; font-weight: 700; text-decoration: none; }
+    .menu { position: relative; }
+    .menu summary { list-style: none; cursor: pointer; width: 38px; height: 38px; display: grid; place-items: center; font-size: 0; }
+    .menu summary::-webkit-details-marker { display: none; }
+    .menu summary::before { content: "☰"; color: white; font-size: 21px; }
+    .menu[open] nav { position: absolute; z-index: 1000; top: 42px; right: 0; width: 220px; padding: 8px; background: #fff; border: 1px solid #e4eaf1; border-radius: 8px; box-shadow: 0 8px 24px #17345626; }
+    .menu nav a, .menu nav span { display: block; padding: 10px 12px; color: #314253; text-decoration: none; font-size: 14px; }
+    .menu nav a:hover { background: #f0f5fb; border-radius: 5px; }
+    main { padding: 24px 20px 48px; }
+    @media (max-width: 600px) { .header-inner { width: calc(100% - 32px); } main { padding: 16px 14px 32px; } }
+  </style>
 </head>
 <body>
-  <!-- ヘッダー -->
-  <h1>防災アプリ</h1>
-
-  <!-- ナビゲーション -->
-  <nav>
-    <a href="/">ホーム</a> |
-    <a href="/shelter_search">避難所検索</a> |
-    <a href="/shelter_register">避難所登録</a> |
-    <a href="/board">指示・発信ボード</a>
-    ｜
-    {% if session.logged_in %}
-      ログイン中{% if session.username %}（{{ session.username }}）{% endif %}
-      <a href="/logout">ログアウト</a>
-    {% else %}
-      未ログイン
-      <a href="/login">ログイン</a>
-    {% endif %}
-  </nav>
-  <hr>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/">防災アプリ</a>
+      <details class="menu">
+        <summary>メニュー</summary>
+        <nav aria-label="メインメニュー">
+          <a href="/">ホーム</a>
+          <a href="/shelter_search">避難所検索</a>
+          <a href="/shelter_register">避難所登録</a>
+          <a href="/board">指示・発信ボード</a>
+          {% if session.logged_in %}
+            <span>ログイン中{% if session.username %}（{{ session.username }}）{% endif %}</span>
+            <a href="/logout">ログアウト</a>
+          {% else %}
+            <a href="/login">ログイン</a>
+          {% endif %}
+        </nav>
+      </details>
+    </div>
+  </header>
 
   <main>
     <!-- ここに子テンプレートの content が入る -->
