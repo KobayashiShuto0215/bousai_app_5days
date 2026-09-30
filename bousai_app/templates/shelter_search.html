@@ -34,7 +34,7 @@
 	<p class="search-intro">位置情報を使って、近くの避難所を距離順に表示します。</p>
 
 	<div class="search-actions">
-		<button class="primary-action" id="current-location-button" type="button">現在地を取得</button>
+		<button class="primary-action" id="current-location-button" type="button">現在地を追跡</button>
 		<button class="secondary-action" id="station-test-button" type="button">青森駅をテスト地点にする</button>
 	</div>
 
@@ -54,6 +54,15 @@
 	const stationButton = document.getElementById('station-test-button');
 	const status = document.getElementById('location-status');
 	const results = document.getElementById('shelter-results');
+	let watchId = null;
+	let trackingRequested = false;
+	let latestOrigin = null;
+	let lastRenderedOrigin = null;
+	let lastRenderedAt = 0;
+	let lastGeocodedOrigin = null;
+	let lastGeocodedAt = 0;
+	let locationName = '';
+	let geocodeRequestId = 0;
 
 	function distanceMeters(origin, destination) {
 		const radians = degrees => degrees * Math.PI / 180;
@@ -114,34 +123,97 @@
 		});
 	}
 
-	stationButton.addEventListener('click', () => showNearest(station, '青森駅'));
+	function stopWatch() {
+		if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+		watchId = null;
+	}
+
+	function stopTracking() {
+		trackingRequested = false;
+		stopWatch();
+		geocodeRequestId += 1;
+		currentButton.textContent = '現在地を追跡';
+		status.textContent = '現在地の追跡を停止しました。';
+	}
+
+	function startWatch() {
+		if (!trackingRequested || document.hidden || watchId !== null) return;
+		currentButton.textContent = '追跡を停止';
+		status.textContent = latestOrigin ? '現在地の追跡を再開しています...' : '現在位置を取得しています...';
+		watchId = navigator.geolocation.watchPosition(
+			position => {
+				if (!trackingRequested) return;
+				const origin = {
+					latitude: position.coords.latitude,
+					longitude: position.coords.longitude
+				};
+				latestOrigin = origin;
+				const now = Date.now();
+				const movedSinceRender = !lastRenderedOrigin || distanceMeters(lastRenderedOrigin, origin) >= 25;
+				if (movedSinceRender || now - lastRenderedAt >= 15000) {
+					lastRenderedOrigin = origin;
+					lastRenderedAt = now;
+					const label = locationName ? `現在地（${locationName}）` : '現在地';
+					showNearest(origin, label);
+					status.textContent = `${label}を追跡中。近い避難所をリアルタイム更新しています。`;
+				}
+
+				const movedSinceGeocode = !lastGeocodedOrigin || distanceMeters(lastGeocodedOrigin, origin) >= 250;
+				if (movedSinceGeocode && now - lastGeocodedAt >= 60000) {
+					lastGeocodedOrigin = origin;
+					lastGeocodedAt = now;
+					const requestId = ++geocodeRequestId;
+					getLocationName(origin.latitude, origin.longitude).then(name => {
+						if (!trackingRequested || requestId !== geocodeRequestId || !name) return;
+						locationName = name;
+						if (latestOrigin) {
+							const label = `現在地（${locationName}）`;
+							showNearest(latestOrigin, label);
+							status.textContent = `${label}を追跡中。近い避難所をリアルタイム更新しています。`;
+						}
+					});
+				}
+			},
+			error => {
+				if (error.code === error.PERMISSION_DENIED) {
+					trackingRequested = false;
+					stopWatch();
+					currentButton.textContent = '現在地を追跡';
+					status.textContent = '位置情報が許可されませんでした。青森駅のテスト地点をお使いください。';
+				} else {
+					status.textContent = '現在位置を取得できません。測位を続けています。';
+				}
+			},
+			{ enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+		);
+	}
+
+	stationButton.addEventListener('click', () => {
+		if (trackingRequested) stopTracking();
+		showNearest(station, '青森駅');
+	});
 
 	currentButton.addEventListener('click', () => {
 		if (!navigator.geolocation) {
 			status.textContent = 'このブラウザーでは位置情報を利用できません。青森駅のテスト地点をお使いください。';
 			return;
 		}
+		if (trackingRequested) {
+			stopTracking();
+			return;
+		}
+		trackingRequested = true;
+		startWatch();
+	});
 
-		currentButton.disabled = true;
-		status.textContent = '現在位置を取得しています...';
-		navigator.geolocation.getCurrentPosition(
-			async position => {
-				const origin = {
-					latitude: position.coords.latitude,
-					longitude: position.coords.longitude
-				};
-				const locationName = await getLocationName(origin.latitude, origin.longitude);
-				currentButton.disabled = false;
-				showNearest(origin, locationName ? `現在地（${locationName}）` : '現在地');
-			},
-			error => {
-				currentButton.disabled = false;
-				status.textContent = error.code === error.PERMISSION_DENIED
-					? '位置情報が許可されませんでした。青森駅のテスト地点をお使いください。'
-					: '現在位置を取得できませんでした。もう一度試すか、青森駅のテスト地点をお使いください。';
-			},
-			{ enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
-		);
+	document.addEventListener('visibilitychange', () => {
+		if (!trackingRequested) return;
+		if (document.hidden) {
+			stopWatch();
+			status.textContent = '画面が非表示のため追跡を一時停止しました。表示すると再開します。';
+		} else {
+			startWatch();
+		}
 	});
 })();
 </script>

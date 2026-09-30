@@ -78,7 +78,7 @@
         <h2 class="panel-title" id="home-shelter-heading"><span class="title-icon" aria-hidden="true">📍</span>現在地から近くの避難所</h2>
         <p class="nearest-intro">現在地を取得するか、青森駅をテスト地点にして近い施設を表示できます。</p>
         <div class="nearest-actions">
-            <button class="nearest-primary" id="home-current-location-button" type="button">現在地を取得</button>
+            <button class="nearest-primary" id="home-current-location-button" type="button">現在地を追跡</button>
             <button class="nearest-secondary" id="home-station-test-button" type="button">青森駅をテスト地点にする</button>
         </div>
         <h3 class="nearest-heading">近くの避難所 <span class="results-count">上位5施設</span></h3>
@@ -104,9 +104,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }).addTo(map);
 
     let selectedShelterMarker = null;
+    let selectedShelter = null;
     let originMarker = null;
     let routeLayer = null;
     let selectedOrigin = null;
+    let lastRoutedOrigin = null;
+    let lastRouteRequestedAt = 0;
     let routeRequestSequence = 0;
     const routeStatus = document.getElementById('map-route-status');
     const mapElement = document.getElementById('shelterMap');
@@ -117,21 +120,12 @@ document.addEventListener('DOMContentLoaded', function() {
         return content;
     }
 
-    window.focusShelterOnMap = async shelter => {
-        const coordinates = [shelter.latitude, shelter.longitude];
-        map.setView(coordinates, 16);
-        if (selectedShelterMarker) map.removeLayer(selectedShelterMarker);
-        selectedShelterMarker = L.marker(coordinates).addTo(map);
-        selectedShelterMarker.bindPopup(createPopupContent(shelter.name)).openPopup();
-
+    async function drawWalkingRoute(shelter, origin, fitMap) {
         const requestSequence = ++routeRequestSequence;
         if (routeLayer) map.removeLayer(routeLayer);
         routeLayer = null;
-        if (!selectedOrigin) {
-            routeStatus.textContent = '出発地点を選択すると徒歩経路を表示できます。';
-            mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            return;
-        }
+        lastRoutedOrigin = { latitude: origin.latitude, longitude: origin.longitude };
+        lastRouteRequestedAt = Date.now();
 
         routeStatus.textContent = '徒歩経路を取得しています...';
         try {
@@ -156,7 +150,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 weight: 5,
                 opacity: 0.9
             }).addTo(map);
-            map.fitBounds(routeLayer.getBounds().pad(0.15), { maxZoom: 15 });
+            if (fitMap) map.fitBounds(routeLayer.getBounds().pad(0.15), { maxZoom: 15 });
             selectedShelterMarker.openPopup();
             const distance = route.distance_km < 1
                 ? `${Math.round(route.distance_km * 1000)} m`
@@ -167,26 +161,67 @@ document.addEventListener('DOMContentLoaded', function() {
             if (requestSequence !== routeRequestSequence) return;
             routeStatus.textContent = '徒歩経路を取得できませんでした。避難所の位置を表示しています。';
         }
+    }
+
+    window.focusShelterOnMap = async shelter => {
+        selectedShelter = shelter;
+        const coordinates = [shelter.latitude, shelter.longitude];
+        map.setView(coordinates, 16);
+        if (selectedShelterMarker) map.removeLayer(selectedShelterMarker);
+        selectedShelterMarker = L.marker(coordinates).addTo(map);
+        selectedShelterMarker.bindPopup(createPopupContent(shelter.name)).openPopup();
+
+        if (!selectedOrigin) {
+            routeRequestSequence += 1;
+            if (routeLayer) map.removeLayer(routeLayer);
+            routeLayer = null;
+            routeStatus.textContent = '出発地点を選択すると徒歩経路を表示できます。';
+        } else {
+            await drawWalkingRoute(shelter, selectedOrigin, true);
+        }
         mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
-    window.markOriginOnMap = (origin, locationLabel) => {
+    window.markOriginOnMap = (origin, locationLabel, options = {}) => {
+        const followMap = options.followMap !== false;
+        const previousOrigin = selectedOrigin;
         selectedOrigin = { latitude: origin.latitude, longitude: origin.longitude };
-        routeRequestSequence += 1;
-        if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = null;
-        routeStatus.textContent = `${locationLabel}を出発地点に設定しました。避難所を選択すると徒歩経路を表示します。`;
         const coordinates = [origin.latitude, origin.longitude];
-        map.setView(coordinates, 14);
-        if (originMarker) map.removeLayer(originMarker);
-        originMarker = L.circleMarker(coordinates, {
-            radius: 9,
-            color: '#fff',
-            weight: 3,
-            fillColor: '#d74735',
-            fillOpacity: 1
-        }).addTo(map);
-        originMarker.bindPopup(createPopupContent(locationLabel)).openPopup();
-        mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (originMarker) {
+            originMarker.setLatLng(coordinates);
+            originMarker.setPopupContent(createPopupContent(locationLabel));
+        } else {
+            originMarker = L.circleMarker(coordinates, {
+                radius: 9,
+                color: '#fff',
+                weight: 3,
+                fillColor: '#d74735',
+                fillOpacity: 1
+            }).addTo(map);
+            originMarker.bindPopup(createPopupContent(locationLabel));
+        }
+
+        if (followMap) {
+            map.setView(coordinates, 14);
+            originMarker.openPopup();
+            routeRequestSequence += 1;
+            if (routeLayer) map.removeLayer(routeLayer);
+            routeLayer = null;
+            routeStatus.textContent = `${locationLabel}を出発地点に設定しました。`;
+            if (selectedShelter) drawWalkingRoute(selectedShelter, selectedOrigin, true);
+            mapElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (selectedShelter) {
+            const moved = previousOrigin
+                ? map.distance([previousOrigin.latitude, previousOrigin.longitude], coordinates)
+                : Infinity;
+            const movedSinceRoute = lastRoutedOrigin
+                ? map.distance([lastRoutedOrigin.latitude, lastRoutedOrigin.longitude], coordinates)
+                : Infinity;
+            if (movedSinceRoute >= 100 || Date.now() - lastRouteRequestedAt >= 60000) {
+                drawWalkingRoute(selectedShelter, selectedOrigin, false);
+            } else if (moved >= 25 && !routeLayer) {
+                routeStatus.textContent = '徒歩経路を取得しています...';
+            }
+        }
     };
 
     // 気象警報・注意報の自動更新機能
@@ -244,6 +279,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const stationButton = document.getElementById('home-station-test-button');
     const status = document.getElementById('home-location-status');
     const results = document.getElementById('home-shelter-results');
+    let watchId = null;
+    let trackingRequested = false;
+    let hasCurrentFix = false;
+    let latestOrigin = null;
+    let lastRenderedOrigin = null;
+    let lastRenderedAt = 0;
+    let lastGeocodedOrigin = null;
+    let lastGeocodedAt = 0;
+    let locationName = '';
+    let geocodeRequestId = 0;
 
     function distanceMeters(origin, destination) {
         const radians = degrees => degrees * Math.PI / 180;
@@ -314,7 +359,76 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    function stopWatch() {
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
+
+    function stopTracking() {
+        trackingRequested = false;
+        stopWatch();
+        geocodeRequestId += 1;
+        currentButton.textContent = '現在地を追跡';
+        status.textContent = '現在地の追跡を停止しました。';
+    }
+
+    function startWatch() {
+        if (!trackingRequested || document.hidden || watchId !== null) return;
+        currentButton.textContent = '追跡を停止';
+        status.textContent = latestOrigin ? '現在地の追跡を再開しています...' : '現在位置を取得しています...';
+        watchId = navigator.geolocation.watchPosition(
+            position => {
+                if (!trackingRequested) return;
+                const origin = {
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude
+                };
+                latestOrigin = origin;
+                const now = Date.now();
+                const firstFix = !hasCurrentFix;
+                const moved = !lastRenderedOrigin || distanceMeters(lastRenderedOrigin, origin) >= 25;
+                if (firstFix || moved || now - lastRenderedAt >= 15000) {
+                    hasCurrentFix = true;
+                    lastRenderedOrigin = origin;
+                    lastRenderedAt = now;
+                    const label = locationName ? `現在地（${locationName}）` : '現在地';
+                    window.markOriginOnMap?.(origin, label, { followMap: firstFix });
+                    showNearest(origin, label);
+                    status.textContent = `${label}を追跡中。近い避難所をリアルタイム更新しています。`;
+                }
+
+                const movedSinceGeocode = !lastGeocodedOrigin || distanceMeters(lastGeocodedOrigin, origin) >= 250;
+                if (movedSinceGeocode && now - lastGeocodedAt >= 60000) {
+                    lastGeocodedOrigin = origin;
+                    lastGeocodedAt = now;
+                    const requestId = ++geocodeRequestId;
+                    getLocationName(origin.latitude, origin.longitude).then(name => {
+                        if (!trackingRequested || requestId !== geocodeRequestId || !name || !latestOrigin) return;
+                        locationName = name;
+                        const label = `現在地（${locationName}）`;
+                        window.markOriginOnMap?.(latestOrigin, label, { followMap: false });
+                        showNearest(latestOrigin, label);
+                        status.textContent = `${label}を追跡中。近い避難所をリアルタイム更新しています。`;
+                    });
+                }
+            },
+            error => {
+                if (error.code === error.PERMISSION_DENIED) {
+                    trackingRequested = false;
+                    stopWatch();
+                    currentButton.textContent = '現在地を追跡';
+                    status.textContent = '位置情報が許可されませんでした。青森駅のテスト地点をお使いください。';
+                } else {
+                    status.textContent = '現在位置を取得できません。測位を続けています。';
+                }
+            },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+        );
+    }
+
     stationButton.addEventListener('click', () => {
+        if (trackingRequested) stopTracking();
+        hasCurrentFix = false;
         window.markOriginOnMap?.(station, '青森駅');
         showNearest(station, '青森駅');
     });
@@ -324,29 +438,23 @@ document.addEventListener('DOMContentLoaded', function() {
             status.textContent = 'このブラウザーでは位置情報を利用できません。青森駅のテスト地点をお使いください。';
             return;
         }
+        if (trackingRequested) {
+            stopTracking();
+            return;
+        }
+        trackingRequested = true;
+        hasCurrentFix = false;
+        startWatch();
+    });
 
-        currentButton.disabled = true;
-        status.textContent = '現在位置を取得しています...';
-        navigator.geolocation.getCurrentPosition(
-            async position => {
-                const origin = {
-                    latitude: position.coords.latitude,
-                    longitude: position.coords.longitude
-                };
-                const locationName = await getLocationName(origin.latitude, origin.longitude);
-                currentButton.disabled = false;
-                const locationLabel = locationName ? `現在地（${locationName}）` : '現在地';
-                window.markOriginOnMap?.(origin, locationLabel);
-                showNearest(origin, locationLabel);
-            },
-            error => {
-                currentButton.disabled = false;
-                status.textContent = error.code === error.PERMISSION_DENIED
-                    ? '位置情報が許可されませんでした。青森駅のテスト地点をお使いください。'
-                    : '現在位置を取得できませんでした。もう一度試すか、青森駅のテスト地点をお使いください。';
-            },
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
-        );
+    document.addEventListener('visibilitychange', () => {
+        if (!trackingRequested) return;
+        if (document.hidden) {
+            stopWatch();
+            status.textContent = '画面が非表示のため追跡を一時停止しました。表示すると再開します。';
+        } else {
+            startWatch();
+        }
     });
 })();
 </script>
